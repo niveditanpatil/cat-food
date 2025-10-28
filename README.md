@@ -1,0 +1,225 @@
+# Cat Food Nutrition Optimizer
+
+A Python application that calculates optimal food quantities for cats using linear programming to meet specific calorie and macronutrient targets.
+
+## Features
+
+- **Flexible Weight Units**: Accept weights in any unit (oz, lb, g, kg) and converts internally
+- **Automatic Conversion**: All weight calculations are normalized to ounces
+- **Linear Programming**: Uses scipy.optimize to find optimal quantities meeting:
+  - Protein ≥ 55%
+  - Carbohydrates ≤ 2%
+  - Fat ≥ 45%
+- **Moisture Adjustment**: Automatically adjusts dry-matter nutritional values for wet foods
+- **CSV Data Management**: Easy-to-edit CSV format for managing food items
+
+## Project Structure
+
+```
+cat-food/
+├── config.py          # Configuration constants (weight units, macronutrient targets)
+├── nutrition.py       # Core business logic (Item class, calculations, optimization)
+├── main.py           # Entry point with I/O operations (CSV loading)
+├── items.csv         # Food item data
+├── requirements.txt  # Python dependencies
+└── venv/            # Virtual environment
+```
+
+## Installation
+
+1. **Clone the repository**
+   ```bash
+   git clone <repository-url>
+   cd cat-food
+   ```
+
+2. **Create a virtual environment**
+   ```bash
+   python3 -m venv venv
+   ```
+
+3. **Activate the virtual environment**
+   ```bash
+   source venv/bin/activate  # On macOS/Linux
+   # or
+   venv\Scripts\activate  # On Windows
+   ```
+
+4. **Install dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+## Usage
+
+### Basic Usage
+
+Run the main script:
+```bash
+python main.py
+```
+
+This will:
+1. Calculate calorie requirements based on weight, activity level, and feeding frequency
+2. Load food items from `items.csv`
+3. Find optimal quantities that meet macronutrient targets
+
+### Adding Food Items
+
+Edit `items.csv` to add or modify food items:
+
+```csv
+name,calories,weight,weight_unit,min_protein,max_fiber,min_fat,max_moisture,ash
+```
+
+**Columns:**
+- `name`: Item identifier (e.g., "chicken", "salmon")
+- `calories`: Total calories in the given weight
+- `weight`: Weight value
+- `weight_unit`: Unit of measurement (`oz`, `lb`, `g`, `kg`, `grams`, etc.)
+- `min_protein`: Protein percentage from label (as-fed)
+- `max_fiber`: Fiber percentage from label (as-fed)
+- `min_fat`: Fat percentage from label (as-fed)
+- `max_moisture`: Moisture percentage from label (as-fed, 0 means already dry matter)
+- `ash`: Ash percentage (as-fed) - typically 3% for canned food, 6% for dry food³
+
+**Carbohydrate Calculation:**
+Carbs are automatically calculated using the formula:³
+```
+Carbs = 100 - (Protein + Fat + Fiber + Moisture + Ash)
+```
+
+**Dry Matter Conversion:**
+All label values are automatically converted to dry matter basis for fair comparison.⁴
+
+**Supported Weight Units:**
+- `oz`, `ozs`, `ounce`, `ounces` - Ounces
+- `lb`, `lbs`, `pound`, `pounds` - Pounds
+- `g`, `gram`, `grams` - Grams
+- `kg`, `kilogram`, `kilograms`, `kilo` - Kilograms
+
+**Example:**
+```csv
+name,calories,weight,weight_unit,min_protein,max_fiber,min_fat,max_moisture,ash
+chicken_pate,100,3,oz,10,1.5,5,78,3
+salmon_kibble,400,100,grams,35,2.5,15,8,6
+special_dry,350,200,grams,40,3,20,0,6
+```
+
+Note: `max_moisture=0` in the last example indicates values are already on dry matter basis.
+
+### Customizing Macronutrient Targets
+
+Edit `config.py` to adjust target percentages:
+
+```python
+MACRONUTRIENT_TARGETS = {
+    'protein': 55,  # Minimum protein percentage
+    'carbs': 2,     # Maximum carbohydrate percentage
+    'fat': 45       # Minimum fat percentage
+}
+```
+
+These targets are based on the natural diet of wild cats: approximately 55% protein, 45% fat, and 1-2% carbohydrates.¹
+
+## How It Works
+
+### 1. Calorie Calculation (`calc_cal`)
+
+Calculates daily calorie requirement per meal using the formula²:
+```
+resting_energy_requirement = (30 × weight_kg + 70) × activity_multiplier
+Daily Calories = resting_energy_requirement × (0.8 if neutered, else 1.0)
+Per Meal = Daily Calories / meal_count
+```
+
+**Activity Levels:**
+- `1`: Low activity (1.2x multiplier) - Sedentary
+- `2`: Medium activity (1.5x multiplier) - Moderately Active
+- `3`: High activity (2.0x multiplier) - Highly Active
+
+**Neutering Adjustment:** Neutered pets have a lower energy requirement, so multiply the TER by 0.8 for neutered cats.²
+
+### 2. Optimization (`calc_quant`)
+
+Uses linear programming to find quantities that:
+- Exactly match calorie requirements
+- Meet all macronutrient constraints
+- Minimize total quantity
+
+If no exact solution exists, falls back to nonlinear optimization to minimize constraint violations.
+
+### 3. Carbohydrate Calculation
+
+Carbs are calculated from the guaranteed analysis using the formula from PetMD:³
+```python
+carbs = 100 - (protein + fat + fiber + moisture + ash)
+```
+
+This is necessary because AAFCO regulations don't require carb reporting on labels.
+
+**Important Note:**³ Using crude fiber instead of total dietary fiber overestimates calculated carbs by approximately 21% on average (range: 3% to 93%). The optimizer accounts for this by adjusting calculated carb values downward when comparing to targets:
+```python
+adjusted_carbs = calculated_carbs * (1 - 0.21)
+```
+
+This ensures the optimization doesn't reject foods that actually meet carb targets but appear high due to the overestimation.
+
+### 4. Dry Matter Basis Conversion
+
+All foods are converted to dry matter basis for fair comparison, following TheCatSite methodology:⁴
+```python
+dry_mass = 100 - moisture_percent
+adjusted_macro = (as_fed_macro / dry_mass) × 100
+```
+
+**Special case:** If moisture = 0, values are assumed to already be on dry matter basis (no conversion applied).
+
+This ensures wet foods (78% moisture) and dry foods (8% moisture) are compared fairly.
+
+## Module Documentation
+
+### config.py
+Configuration constants including:
+- Weight conversion factors
+- Macronutrient targets
+- Carb overestimation factor (accounts for crude fiber overestimation)³
+
+### nutrition.py
+Core functionality:
+- **Item class**: Represents a food item with nutritional data
+  - Attributes: `name`, `calories_per_oz`, `min_protein`, `max_carbs`, `min_fat`
+  - All nutrients automatically converted to dry matter basis for fair comparison
+- **calc_cal()**: Calculate calorie requirements based on weight, activity, and meal count
+- **calc_quant()**: Find optimal quantities using linear programming
+- **Item.__init__()**: Automatically converts all weights to ounces and nutrients to dry matter basis
+
+### main.py
+I/O operations:
+- **load_items_from_csv()**: Reads CSV and creates Item objects
+- **main()**: Application entry point
+
+## Requirements
+
+- Python 3.7+
+- numpy >= 1.20.0
+- scipy >= 1.7.0
+
+## References
+
+1. [The Complete Guide to Feline Nutrition](https://cats.com/the-complete-guide-to-feline-nutrition). Cats.com. Retrieved 2024.
+
+2. [Metabolic Food Requirements for Your Pet](https://wilsonvet.net/metabolic-food-requirements-for-your-pet/). Wilson Veterinary Hospital. Retrieved 2024.
+
+3. [Figuring Out Carb Levels in Cat Foods](https://www.petmd.com/blogs/nutritionnuggets/cat/dr-coates/2014/july/figuring-out-carb-levels-cat-foods-31869). PetMD. Published July 11, 2014.
+
+4. [How to Compare Cat Foods - Calculate Carbs and Dry Matter Basis](https://thecatsite.com/c/how-to-compare-cat-foods-calculate-carbs-dry-matter-basis/). TheCatSite. Retrieved 2024.
+
+## Contributing
+
+Feel free to submit issues or pull requests for improvements.
+
+## License
+
+This project is open source and available for personal use.
+

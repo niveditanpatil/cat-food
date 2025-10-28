@@ -1,0 +1,7 @@
+name,calories,weight,weight_unit,min_protein,max_fiber,min_fat,max_moisture,ash
+a,407,1,kg,10,1.5,5,78,3
+b,4200,1,lb,43,1.2,28,8,6
+c,39,100,grams,17,2.2,7.6,72,3
+d,41,1,oz,15.6,1.7,7.7,72,3
+e,40,1,oz,13,1.5,8.5,73,3
+f,3590,1,kg,65,2.5,10,8,6
