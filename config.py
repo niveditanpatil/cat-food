@@ -5,7 +5,7 @@ Configuration constants for the nutrition optimization module.
 # Weight conversion constants (all to ounces)
 OZ_PER_LB = 16.0
 GRAMS_PER_OZ = 28.3495
-KG_TO_OZ = GRAMS_PER_OZ * 1000
+KG_TO_OZ = 1000 / GRAMS_PER_OZ
 
 # Conversion factors to ounces for different weight units
 WEIGHT_CONVERSION = {
