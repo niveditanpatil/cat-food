@@ -15,9 +15,10 @@ def load_items_from_csv(csv_file: str) -> List[nutrition.Item]:
     Load items from a CSV file and create Item objects.
     
     CSV format:
-    name,calories,weight,weight_unit,min_protein,max_fiber,min_fat,max_moisture,ash,max_carbs
+    name,type,calories,weight,weight_unit,min_protein,max_fiber,min_fat,max_moisture,ash,max_carbs
     
-    Carbs can be provided directly in max_carbs column, OR calculated using: Carbs = 100 - (Protein + Fat + Fiber + Moisture + Ash)³
+    - type: 'food' or 'treat' (treats limited to 10% of calories per VCA Animal Hospitals⁴)
+    - Carbs can be provided directly in max_carbs column, OR calculated using: Carbs = 100 - (Protein + Fat + Fiber + Moisture + Ash)³
     
     Leave max_carbs empty to calculate from other values.
     Supported weight units: oz, lb, g, kg, and their variations
@@ -46,6 +47,7 @@ def load_items_from_csv(csv_file: str) -> List[nutrition.Item]:
                 
                 item = nutrition.Item(
                     name=row['name'],
+                    item_type=row['type'],
                     calories=float(row['calories']),
                     weight=float(row['weight']),
                     weight_unit=row['weight_unit'],

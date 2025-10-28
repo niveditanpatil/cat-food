@@ -10,7 +10,9 @@ A Python application that calculates optimal food quantities for cats using line
   - Protein ≥ 55%
   - Carbohydrates ≤ 2%
   - Fat ≥ 45%
+  - Treats ≤ 10% of total calories⁴
 - **Moisture Adjustment**: Automatically adjusts dry-matter nutritional values for wet foods
+- **Treat Management**: Distinguishes between food and treats with automatic calorie limits
 - **CSV Data Management**: Easy-to-edit CSV format for managing food items
 
 ## Project Structure
@@ -20,7 +22,7 @@ cat-food/
 ├── config.py          # Configuration constants (weight units, macronutrient targets)
 ├── nutrition.py       # Core business logic (Item class, calculations, optimization)
 ├── main.py           # Entry point with I/O operations (CSV loading)
-├── items.csv         # Food item data
+├── food_and_treats.csv  # Food and treat item data
 ├── cat_config.csv    # Cat profile configuration
 ├── requirements.txt  # Python dependencies
 └── venv/            # Virtual environment
@@ -83,16 +85,17 @@ meal_count,4
 - `neutered`: Whether your cat is neutered (`True` or `False`)
 - `meal_count`: Number of meals per day
 
-### Adding Food Items
+### Adding Food Items and Treats
 
-Edit `food_and_treats.csv` to add or modify food items:
+Edit `food_and_treats.csv` to add or modify food items and treats:
 
 ```csv
-name,calories,weight,weight_unit,min_protein,max_fiber,min_fat,max_moisture,ash,max_carbs
+name,type,calories,weight,weight_unit,min_protein,max_fiber,min_fat,max_moisture,ash,max_carbs
 ```
 
 **Columns:**
 - `name`: Item identifier (e.g., "chicken", "salmon")
+- `type`: Item type ('food' or 'treat') - treats limited to 10% of calories⁴
 - `calories`: Total calories in the given weight
 - `weight`: Weight value
 - `weight_unit`: Unit of measurement (`oz`, `lb`, `g`, `kg`, `grams`, etc.)
@@ -121,16 +124,18 @@ All label values are automatically converted to dry matter basis for fair compar
 
 **Example:**
 ```csv
-name,calories,weight,weight_unit,min_protein,max_fiber,min_fat,max_moisture,ash,max_carbs
-chicken_pate,100,3,oz,10,1.5,5,78,3,
-salmon_kibble,400,100,grams,35,2.5,15,8,6,
-special_with_carbs,350,200,grams,40,3,20,8,6,2.5
+name,type,calories,weight,weight_unit,min_protein,max_fiber,min_fat,max_moisture,ash,max_carbs
+chicken_pate,food,100,3,oz,10,1.5,5,78,3,
+salmon_kibble,food,400,100,grams,35,2.5,15,8,6,
+cat_treat,treat,15,0.5,oz,8,1,5,75,2,
+special_with_carbs,food,350,200,grams,40,3,20,8,6,2.5
 ```
 
 Notes:
 - Empty `max_carbs` = calculate from other values
 - Filled `max_carbs` = use direct value from label
 - `max_moisture=0` = values already on dry matter basis
+- `type=treat` = treats automatically limited to 10% of calories⁴
 
 ### Customizing Macronutrient Targets
 
@@ -170,6 +175,7 @@ Uses linear programming to find quantities that:
 - Exactly match calorie requirements
 - Meet all macronutrient constraints
 - Minimize total quantity
+- Limit treats to 10% of total calories⁴
 
 If no exact solution exists, falls back to nonlinear optimization to minimize constraint violations.
 
@@ -189,7 +195,16 @@ adjusted_carbs = calculated_carbs * (1 - 0.21)
 
 This ensures the optimization doesn't reject foods that actually meet carb targets but appear high due to the overestimation.
 
-### 4. Dry Matter Basis Conversion
+### 4. Treat Management
+
+The optimizer distinguishes between food and treats to ensure proper nutrition:
+
+- **Food**: Complete and balanced nutrition sources that can make up 90%+ of daily calories
+- **Treats**: Limited to 10% of daily calories per [VCA Animal Hospitals](https://vcahospitals.com/know-your-pet/cat-treats)⁴
+
+This constraint ensures that treats don't interfere with your cat's appetite for regular food or contribute to obesity, while still allowing for enrichment and bonding opportunities.
+
+### 5. Dry Matter Basis Conversion
 
 All foods are converted to dry matter basis for fair comparison, following TheCatSite methodology:⁴
 ```python
@@ -238,7 +253,9 @@ I/O operations:
 
 3. [Figuring Out Carb Levels in Cat Foods](https://www.petmd.com/blogs/nutritionnuggets/cat/dr-coates/2014/july/figuring-out-carb-levels-cat-foods-31869). PetMD. Published July 11, 2014.
 
-4. [How to Compare Cat Foods - Calculate Carbs and Dry Matter Basis](https://thecatsite.com/c/how-to-compare-cat-foods-calculate-carbs-dry-matter-basis/). TheCatSite. Retrieved 2024.
+4. [Cat Treats](https://vcahospitals.com/know-your-pet/cat-treats). VCA Animal Hospitals. Retrieved 2024.
+
+5. [How to Compare Cat Foods - Calculate Carbs and Dry Matter Basis](https://thecatsite.com/c/how-to-compare-cat-foods-calculate-carbs-dry-matter-basis/). TheCatSite. Retrieved 2024.
 
 ## Contributing
 

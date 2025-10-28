@@ -17,6 +17,7 @@ class Item:
     
     Attributes:
         name: Item identifier
+        item_type: Type of item ('food' or 'treat')
         calories_per_oz: Calories per ounce
         min_protein: Minimum protein percentage
         max_carbs: Calculated maximum carbohydrate percentage
@@ -24,7 +25,7 @@ class Item:
         is_dry_matter: Whether the item is dry (no moisture adjustment needed)
     """
     
-    def __init__(self, name: str, calories: float, weight: float, weight_unit: str, 
+    def __init__(self, name: str, item_type: str, calories: float, weight: float, weight_unit: str, 
                  min_protein: float, max_fiber: float, min_fat: float, 
                  max_moisture: float, ash: float, max_carbs: float = None):
         """
@@ -35,6 +36,7 @@ class Item:
         
         Args:
             name: Item identifier
+            item_type: Type of item ('food' or 'treat')
             calories: Total calories
             weight: Weight value
             weight_unit: Unit of weight ('oz', 'lb', 'g', 'kg', etc.)
@@ -46,9 +48,13 @@ class Item:
             max_carbs: Optional carb percentage (as-fed from label). If None, will be calculated.
         
         Raises:
-            ValueError: If weight_unit is invalid or moisture >= 100
+            ValueError: If weight_unit is invalid, moisture >= 100, or item_type is invalid
         """
         self.name = name
+        self.item_type = item_type.lower()
+        
+        if self.item_type not in ['food', 'treat']:
+            raise ValueError(f"item_type must be 'food' or 'treat', got '{item_type}'")
         
         # Normalize weight unit to lowercase
         weight_unit_lower = weight_unit.lower()
@@ -89,7 +95,7 @@ class Item:
             self.min_fat = round((min_fat / dry_mass) * 100, 2)
     
     def __repr__(self):
-        return (f"Item(name='{self.name}', calories_per_oz={self.calories_per_oz}, "
+        return (f"Item(name='{self.name}', type='{self.item_type}', calories_per_oz={self.calories_per_oz}, "
                 f"min_protein={self.min_protein}, max_carbs={self.max_carbs}, "
                 f"min_fat={self.min_fat})")
 
@@ -131,6 +137,7 @@ def calc_quant(items: List[Item], total_calories: float) -> List[Tuple[str, floa
     - Weighted average protein >= 55%
     - Weighted average carbohydrates <= 2%
     - Weighted average fat >= 45%
+    - Treats limited to 10% of total calories (VCA Animal Hospitals⁴)
     
     If no exact solution exists, uses nonlinear optimization to find the best
     approximation that minimizes constraint violations.
@@ -165,9 +172,11 @@ def calc_quant(items: List[Item], total_calories: float) -> List[Tuple[str, floa
         [(item.max_carbs * (1 - config.CARB_OVERESTIMATION_FACTOR) - config.MACRONUTRIENT_TARGETS['carbs']) 
          for item in items],  # Max carbs (adjusted for overestimation)
         [-(item.min_protein - config.MACRONUTRIENT_TARGETS['protein']) for item in items],  # Min protein
-        [-(item.min_fat - config.MACRONUTRIENT_TARGETS['fat']) for item in items]  # Min fat
+        [-(item.min_fat - config.MACRONUTRIENT_TARGETS['fat']) for item in items],  # Min fat
+        # Treat constraint: treats <= 10% of total calories (VCA Animal Hospitals⁴)
+        [item.calories_per_oz if item.item_type == 'treat' else 0 for item in items]  # Max treat calories
     ]
-    inequality_bounds = [0, 0, 0]
+    inequality_bounds = [0, 0, 0, total_calories * 0.1]  # 10% treat limit
     
     # Equality constraint: total calories must equal target
     equality_constraints = [[item.calories_per_oz for item in items]]
@@ -224,8 +233,13 @@ def _find_best_approximation(items: List[Item], total_calories: float,
         carbs_penalty = (max(0, adjusted_carbs - config.MACRONUTRIENT_TARGETS['carbs'])) ** 2
         fat_penalty = (max(0, config.MACRONUTRIENT_TARGETS['fat'] - weighted_fat)) ** 2
         
+        # Treat penalty: treats should not exceed 10% of total calories (VCA Animal Hospitals⁴)
+        treat_calories = sum(quantities[i] * items[i].calories_per_oz 
+                           for i in range(num_items) if items[i].item_type == 'treat')
+        treat_penalty = (max(0, treat_calories - total_calories * 0.1)) ** 2
+        
         # Small penalty on total quantity to prefer minimal solutions
-        return protein_penalty + carbs_penalty + fat_penalty + sum(quantities) * 0.01
+        return protein_penalty + carbs_penalty + fat_penalty + treat_penalty + sum(quantities) * 0.01
     
     def calorie_constraint(quantities):
         """Ensure total calories equal target."""
