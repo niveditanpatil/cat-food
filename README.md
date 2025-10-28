@@ -21,6 +21,7 @@ cat-food/
 ├── nutrition.py       # Core business logic (Item class, calculations, optimization)
 ├── main.py           # Entry point with I/O operations (CSV loading)
 ├── items.csv         # Food item data
+├── cat_config.csv    # Cat profile configuration
 ├── requirements.txt  # Python dependencies
 └── venv/            # Virtual environment
 ```
@@ -60,16 +61,34 @@ python main.py
 ```
 
 This will:
-1. Calculate calorie requirements based on weight, activity level, and feeding frequency
-2. Load food items from `items.csv`
-3. Find optimal quantities that meet macronutrient targets
+1. Load cat configuration from `cat_config.csv` (weight, activity, neutering status, meal count)
+2. Calculate calorie requirements based on the cat's profile
+3. Load food items from `items.csv`
+4. Find optimal quantities that meet macronutrient targets
+
+### Configuring Your Cat's Profile
+
+Edit `cat_config.csv` to set your cat's profile:
+```csv
+parameter,value
+weight_kg,5.5
+activity,1
+neutered,True
+meal_count,4
+```
+
+**Parameters:**
+- `weight_kg`: Your cat's weight in kilograms
+- `activity`: Activity level (1=low/sedentary, 2=medium, 3=high/very active)
+- `neutered`: Whether your cat is neutered (`True` or `False`)
+- `meal_count`: Number of meals per day
 
 ### Adding Food Items
 
-Edit `items.csv` to add or modify food items:
+Edit `food_and_treats.csv` to add or modify food items:
 
 ```csv
-name,calories,weight,weight_unit,min_protein,max_fiber,min_fat,max_moisture,ash
+name,calories,weight,weight_unit,min_protein,max_fiber,min_fat,max_moisture,ash,max_carbs
 ```
 
 **Columns:**
@@ -82,9 +101,11 @@ name,calories,weight,weight_unit,min_protein,max_fiber,min_fat,max_moisture,ash
 - `min_fat`: Fat percentage from label (as-fed)
 - `max_moisture`: Moisture percentage from label (as-fed, 0 means already dry matter)
 - `ash`: Ash percentage (as-fed) - typically 3% for canned food, 6% for dry food³
+- `max_carbs`: **Optional** - Direct carb percentage from label (as-fed). If empty, calculated from other values.
 
-**Carbohydrate Calculation:**
-Carbs are automatically calculated using the formula:³
+**Carbohydrate Options:**
+1. **Provide directly:** Enter carb percentage in `max_carbs` column
+2. **Auto-calculate:** Leave `max_carbs` empty, carbs calculated using:³
 ```
 Carbs = 100 - (Protein + Fat + Fiber + Moisture + Ash)
 ```
@@ -100,13 +121,16 @@ All label values are automatically converted to dry matter basis for fair compar
 
 **Example:**
 ```csv
-name,calories,weight,weight_unit,min_protein,max_fiber,min_fat,max_moisture,ash
-chicken_pate,100,3,oz,10,1.5,5,78,3
-salmon_kibble,400,100,grams,35,2.5,15,8,6
-special_dry,350,200,grams,40,3,20,0,6
+name,calories,weight,weight_unit,min_protein,max_fiber,min_fat,max_moisture,ash,max_carbs
+chicken_pate,100,3,oz,10,1.5,5,78,3,
+salmon_kibble,400,100,grams,35,2.5,15,8,6,
+special_with_carbs,350,200,grams,40,3,20,8,6,2.5
 ```
 
-Note: `max_moisture=0` in the last example indicates values are already on dry matter basis.
+Notes:
+- Empty `max_carbs` = calculate from other values
+- Filled `max_carbs` = use direct value from label
+- `max_moisture=0` = values already on dry matter basis
 
 ### Customizing Macronutrient Targets
 
@@ -197,6 +221,7 @@ Core functionality:
 ### main.py
 I/O operations:
 - **load_items_from_csv()**: Reads CSV and creates Item objects
+- **load_cat_config()**: Reads cat configuration from CSV
 - **main()**: Application entry point
 
 ## Requirements

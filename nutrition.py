@@ -26,12 +26,12 @@ class Item:
     
     def __init__(self, name: str, calories: float, weight: float, weight_unit: str, 
                  min_protein: float, max_fiber: float, min_fat: float, 
-                 max_moisture: float, ash: float):
+                 max_moisture: float, ash: float, max_carbs: float = None):
         """
         Initialize a food item.
         
         All foods default to as-fed basis and are converted to dry matter for fair comparison.
-        Carbs are calculated using the formula: Carbs = 100 - (Protein + Fat + Fiber + Moisture + Ash)³
+        Carbs can be provided directly OR calculated using: Carbs = 100 - (Protein + Fat + Fiber + Moisture + Ash)³
         
         Args:
             name: Item identifier
@@ -39,10 +39,11 @@ class Item:
             weight: Weight value
             weight_unit: Unit of weight ('oz', 'lb', 'g', 'kg', etc.)
             min_protein: Minimum protein percentage (as-fed from label)
-            max_fiber: Maximum fiber percentage (as-fed from label)
+            max_fiber: Maximum fiber percentage (as-fed from label) - not needed if max_carbs provided
             min_fat: Minimum fat percentage (as-fed from label)
             max_moisture: Maximum moisture percentage (as-fed from label, 0 means already dry matter)
-            ash: Ash percentage (as-fed from label)
+            ash: Ash percentage (as-fed from label) - not needed if max_carbs provided
+            max_carbs: Optional carb percentage (as-fed from label). If None, will be calculated.
         
         Raises:
             ValueError: If weight_unit is invalid or moisture >= 100
@@ -62,8 +63,13 @@ class Item:
         # Calculate calories per oz
         self.calories_per_oz = round(calories / weight_in_ounces, 2)
         
-        # Calculate carbs using the PetMD formula: Carbs = 100 - (Protein + Fat + Fiber + Moisture + Ash)³
-        carbs_as_fed = 100 - (min_protein + min_fat + max_fiber + max_moisture + ash)
+        # Calculate or use provided carbs
+        if max_carbs is not None:
+            # Use provided carb value (already as-fed)
+            carbs_as_fed = max_carbs
+        else:
+            # Calculate carbs using the PetMD formula: Carbs = 100 - (Protein + Fat + Fiber + Moisture + Ash)³
+            carbs_as_fed = 100 - (min_protein + min_fat + max_fiber + max_moisture + ash)
         
         # Convert all nutrients to dry matter basis for fair comparison
         if max_moisture >= 100:
