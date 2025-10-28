@@ -8,6 +8,7 @@ the main application entry point.
 import csv
 from typing import List
 import nutrition
+import interactive
 
 
 def load_items_from_csv(csv_file: str) -> List[nutrition.Item]:
@@ -124,7 +125,75 @@ def load_cat_config(config_file: str = 'cat_config.csv') -> dict:
 
 
 def main():
-    """Example usage of the nutrition optimization functions."""
+    """Interactive application entry point."""
+    try:
+        print("🐱 Cat Food Nutrition Optimizer")
+        print("=" * 50)
+        
+        # Load cat configuration
+        cat_config = load_cat_config('cat_config.csv')
+        
+        # Calculate calorie requirement
+        total_calories = nutrition.calc_cal(
+            weight_kg=cat_config['weight_kg'],
+            activity=cat_config['activity'],
+            neutered=cat_config['neutered'],
+            meal_count=cat_config['meal_count']
+        )
+        
+        print(f"📊 Cat Profile:")
+        print(f"   Weight: {cat_config['weight_kg']} kg")
+        print(f"   Activity: {cat_config['activity']} ({'Low' if cat_config['activity'] == 1 else 'Medium' if cat_config['activity'] == 2 else 'High'})")
+        print(f"   Neutered: {'Yes' if cat_config['neutered'] else 'No'}")
+        print(f"   Meals per day: {cat_config['meal_count']}")
+        print(f"   Calories per meal: {total_calories}")
+        
+        # Load all available items
+        all_items = load_items_from_csv('food_and_treats.csv')
+        
+        if not all_items:
+            print("❌ No food items found in food_and_treats.csv")
+            return
+        
+        # Get user's item selection
+        selected_items = interactive.get_user_selection(all_items)
+        
+        if not selected_items:
+            print("❌ No items selected. Exiting.")
+            return
+        
+        # Get treat preference (only if treats are available in selection)
+        treats_in_selection = [item for item in selected_items if item.item_type == 'treat']
+        if treats_in_selection:
+            include_treat = interactive.get_treat_preference()
+        else:
+            include_treat = False
+            print("\n✓ No treats selected - optimizing purely for nutrition.")
+        
+        # Confirm calculation
+        if not interactive.confirm_calculation(total_calories, selected_items, include_treat):
+            print("❌ Calculation cancelled.")
+            return
+        
+        # Calculate optimal quantities
+        print("\n🔄 Calculating optimal quantities...")
+        results = nutrition.calc_quant(selected_items, total_calories, include_treat)
+        
+        # Display results
+        interactive.display_results(results, total_calories, selected_items)
+        
+    except FileNotFoundError as e:
+        print(f"❌ File not found: {e}")
+    except ValueError as e:
+        print(f"❌ Error: {e}")
+    except KeyboardInterrupt:
+        print("\n❌ Operation cancelled by user.")
+    except Exception as e:
+        print(f"❌ Unexpected error: {e}")
+
+
+def main_non_interactive():
+    """Non-interactive mode for automated use."""
     # Load cat configuration
     cat_config = load_cat_config('cat_config.csv')
     
@@ -146,4 +215,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    
+    # Check for command line arguments
+    if len(sys.argv) > 1 and sys.argv[1] == "--non-interactive":
+        main_non_interactive()
+    else:
+        main()

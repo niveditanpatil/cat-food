@@ -33,6 +33,11 @@ MACRONUTRIENT_TARGETS = {
     'fat': 45       # Minimum fat percentage
 }
 
+# Treat inclusion preference
+# When True, ensures at least one treat is included in the meal
+# When False, optimizes purely for nutrition (treats optional)
+INCLUDE_TREAT_BY_DEFAULT = False
+
 # Carb overestimation factor (per PetMD source³)
 # Using crude fiber instead of total dietary fiber overestimates carbs by ~21%
 # We apply this factor to adjust calculated carb values downward

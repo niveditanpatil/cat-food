@@ -128,23 +128,26 @@ def calc_cal(weight_kg: float, activity: int, neutered: bool, meal_count: int) -
     return round(resting_energy_requirement / meal_count, 2)
 
 
-def calc_quant(items: List[Item], total_calories: float) -> List[Tuple[str, float]]:
+def calc_quant(items: List[Item], total_calories: float, include_treat: bool = False) -> List[Tuple[str, float]]:
     """
     Calculate optimal quantities of items to meet calorie and macronutrient targets.
     
-    Uses linear programming to find quantities that satisfy:
+    Uses a two-stage optimization approach:
+    1. First try to find optimal solution without treat constraints
+    2. If treat inclusion is requested, use flexible optimization to include treats
+    
+    Constraints:
     - Total calories equal target
     - Weighted average protein >= 55%
     - Weighted average carbohydrates <= 2%
     - Weighted average fat >= 45%
     - Treats limited to 10% of total calories (VCA Animal Hospitals⁴)
-    
-    If no exact solution exists, uses nonlinear optimization to find the best
-    approximation that minimizes constraint violations.
+    - At least one treat included (if include_treat=True)
     
     Args:
         items: List of Item objects to choose from
         total_calories: Target total calories
+        include_treat: If True, ensures at least one treat is included
     
     Returns:
         List of tuples [(item_name, quantity_in_oz), ...]
@@ -158,48 +161,391 @@ def calc_quant(items: List[Item], total_calories: float) -> List[Tuple[str, floa
     if total_calories <= 0:
         raise ValueError(f"total_calories must be positive, got {total_calories}")
     
+    # Stage 1: Try standard optimization without treat inclusion constraint
+    result = _optimize_standard(items, total_calories)
+    
+    # Stage 2: If treat inclusion is requested, try to include treats
+    if include_treat and result:
+        result_with_treats = _optimize_with_treat_inclusion(items, total_calories, result)
+        if result_with_treats:
+            return result_with_treats
+    
+    return result
+
+
+def _optimize_standard(items: List[Item], total_calories: float) -> List[Tuple[str, float]]:
+    """
+    Standard optimization without treat inclusion constraints.
+    
+    Args:
+        items: List of Item objects
+        total_calories: Target calories
+    
+    Returns:
+        List of tuples [(item_name, quantity_in_oz), ...] or empty list if no solution
+    """
     num_items = len(items)
     
     # Objective: minimize total quantity
     objective_vector = [1] * num_items
     
-    # Inequality constraints for macronutrient ratios
-    # Weighted average by weight: sum(qty * macro) / sum(qty) compared to threshold
-    # Reformulated: sum(qty * (macro - threshold)) <= 0 (or >= 0 for minimums)
-    # Note: Calculated carbs are overestimated by ~21% due to crude fiber (PetMD³)
-    # We adjust the effective carb value downward to account for this
+    # Standard constraints (no treat inclusion)
     inequality_constraints = [
         [(item.max_carbs * (1 - config.CARB_OVERESTIMATION_FACTOR) - config.MACRONUTRIENT_TARGETS['carbs']) 
-         for item in items],  # Max carbs (adjusted for overestimation)
+         for item in items],  # Max carbs
         [-(item.min_protein - config.MACRONUTRIENT_TARGETS['protein']) for item in items],  # Min protein
         [-(item.min_fat - config.MACRONUTRIENT_TARGETS['fat']) for item in items],  # Min fat
-        # Treat constraint: treats <= 10% of total calories (VCA Animal Hospitals⁴)
-        [item.calories_per_oz if item.item_type == 'treat' else 0 for item in items]  # Max treat calories
+        # Treat constraint: treats <= 10% of total calories
+        [item.calories_per_oz if item.item_type == 'treat' else 0 for item in items]
     ]
-    inequality_bounds = [0, 0, 0, total_calories * 0.1]  # 10% treat limit
+    inequality_bounds = [0, 0, 0, total_calories * 0.1]
     
-    # Equality constraint: total calories must equal target
+    # Equality constraint: total calories
     equality_constraints = [[item.calories_per_oz for item in items]]
     equality_bounds = [total_calories]
     
-    # All quantities must be non-negative
+    # Non-negative bounds
     bounds = [(0, None) for _ in range(num_items)]
     
-    # Attempt linear programming solution
+    # Try linear programming
     linear_result = linprog(objective_vector, A_ub=inequality_constraints, 
-                            b_ub=inequality_bounds, A_eq=equality_constraints, 
-                            b_eq=equality_bounds, bounds=bounds, method='highs')
+                           b_ub=inequality_bounds, A_eq=equality_constraints, 
+                           b_eq=equality_bounds, bounds=bounds, method='highs')
     
     if linear_result.success:
         return [(items[i].name, round(float(linear_result.x[i]), 2)) 
                 for i in range(num_items)]
     
-    # Fallback: find best approximation if exact solution doesn't exist
-    return _find_best_approximation(items, total_calories, bounds, num_items)
+    # Fallback to nonlinear optimization
+    return _find_best_approximation(items, total_calories, bounds, num_items, False)
+
+
+def _optimize_with_treat_inclusion(items: List[Item], total_calories: float, 
+                                  base_result: List[Tuple[str, float]]) -> List[Tuple[str, float]]:
+    """
+    Optimize to include treats while maintaining good nutrition.
+    
+    Strategy:
+    1. Check if base result already includes treats
+    2. If not, try to substitute some food with treats
+    3. Use flexible optimization to balance nutrition and treat inclusion
+    
+    Args:
+        items: List of Item objects
+        total_calories: Target calories
+        base_result: Base optimization result
+    
+    Returns:
+        List of tuples [(item_name, quantity_in_oz), ...] or empty list if no improvement
+    """
+    # Check if base result already includes treats
+    treats_in_base = [name for name, qty in base_result if qty > 0 and 
+                     any(item.name == name and item.item_type == 'treat' for item in items)]
+    
+    if treats_in_base:
+        return base_result  # Already includes treats
+    
+    # Try greedy substitution approach
+    substitution_result = _greedy_treat_substitution(items, total_calories, base_result)
+    if substitution_result:
+        return substitution_result
+    
+    # Fall back to simple treat addition
+    return _simple_treat_addition(items, total_calories, base_result)
+
+
+def _greedy_treat_substitution(items: List[Item], total_calories: float, 
+                              base_result: List[Tuple[str, float]]) -> List[Tuple[str, float]]:
+    """
+    Try to substitute some food with treats using a greedy approach.
+    
+    Args:
+        items: List of Item objects
+        total_calories: Target calories
+        base_result: Base optimization result
+    
+    Returns:
+        List of tuples [(item_name, quantity_in_oz), ...] or empty list if no improvement
+    """
+    # Get available treats
+    treats = [item for item in items if item.item_type == 'treat']
+    if not treats:
+        return []
+    
+    # Find the best treat to substitute
+    best_treat = None
+    best_substitution = None
+    
+    for treat in treats:
+        # Try substituting a small amount of food with this treat
+        substitution_result = _try_treat_substitution(items, total_calories, base_result, treat)
+        if substitution_result:
+            if not best_substitution or _is_better_substitution(substitution_result, best_substitution):
+                best_treat = treat
+                best_substitution = substitution_result
+    
+    return best_substitution
+
+
+def _try_treat_substitution(items: List[Item], total_calories: float, 
+                           base_result: List[Tuple[str, float]], treat: Item) -> List[Tuple[str, float]]:
+    """
+    Try substituting a small amount of food with a specific treat.
+    
+    Args:
+        items: List of Item objects
+        total_calories: Target calories
+        base_result: Base optimization result
+        treat: Treat item to substitute with
+    
+    Returns:
+        List of tuples [(item_name, quantity_in_oz), ...] or empty list if substitution fails
+    """
+    # Calculate how much treat we can add (up to 10% of calories)
+    max_treat_calories = total_calories * 0.1
+    max_treat_oz = max_treat_calories / treat.calories_per_oz
+    
+    # Try different treat amounts
+    for treat_oz in [0.01, 0.02, 0.05, max_treat_oz]:
+        if treat_oz > max_treat_oz:
+            break
+            
+        treat_calories = treat_oz * treat.calories_per_oz
+        
+        # Find food items to reduce
+        food_items = [(name, qty) for name, qty in base_result if qty > 0 and 
+                     any(item.name == name and item.item_type == 'food' for item in items)]
+        
+        if not food_items:
+            continue
+            
+        # Try to reduce the food item with lowest calories per oz
+        food_items.sort(key=lambda x: next(item.calories_per_oz for item in items if item.name == x[0]))
+        
+        for food_name, food_qty in food_items:
+            food_item = next(item for item in items if item.name == food_name)
+            food_calories_per_oz = food_item.calories_per_oz
+            
+            # Calculate how much food to reduce
+            food_reduction_oz = treat_calories / food_calories_per_oz
+            
+            if food_reduction_oz >= food_qty:
+                continue  # Can't reduce more than available
+            
+            # Create new result with substitution
+            new_result = []
+            substitution_made = False
+            
+            for name, qty in base_result:
+                if name == food_name and not substitution_made:
+                    new_result.append((name, qty - food_reduction_oz))
+                    substitution_made = True
+                else:
+                    new_result.append((name, qty))
+            
+            # Add treat
+            treat_found = False
+            for name, qty in new_result:
+                if name == treat.name:
+                    treat_found = True
+                    break
+            
+            if not treat_found:
+                new_result.append((treat.name, treat_oz))
+            
+            # Check if this substitution maintains good nutrition
+            if _is_valid_substitution(items, new_result, total_calories):
+                return new_result
+    
+    return []
+
+
+def _is_better_substitution(result1: List[Tuple[str, float]], result2: List[Tuple[str, float]]) -> bool:
+    """Check if result1 is better than result2 for treat inclusion."""
+    # Prefer results with more treat quantity
+    treat_qty1 = sum(qty for name, qty in result1 if any(item.name == name and item.item_type == 'treat' for item in items))
+    treat_qty2 = sum(qty for name, qty in result2 if any(item.name == name and item.item_type == 'treat' for item in items))
+    
+    return treat_qty1 > treat_qty2
+
+
+def _is_valid_substitution(items: List[Item], result: List[Tuple[str, float]], total_calories: float) -> bool:
+    """Check if a substitution result maintains reasonable nutrition."""
+    # Calculate macronutrient ratios
+    total_oz = sum(qty for _, qty in result)
+    if total_oz <= 0:
+        return False
+    
+    weighted_protein = sum(qty * next(item.min_protein for item in items if item.name == name) 
+                          for name, qty in result) / total_oz
+    weighted_carbs = sum(qty * next(item.max_carbs for item in items if item.name == name) 
+                        for name, qty in result) / total_oz
+    weighted_fat = sum(qty * next(item.min_fat for item in items if item.name == name) 
+                      for name, qty in result) / total_oz
+    
+    # Check if nutrition is still reasonable (relaxed constraints)
+    adjusted_carbs = weighted_carbs * (1 - config.CARB_OVERESTIMATION_FACTOR)
+    
+    return (weighted_protein >= 40 and  # Relaxed from 55
+            adjusted_carbs <= 10 and   # Relaxed from 2
+            weighted_fat >= 30)        # Relaxed from 45
+
+
+def _simple_treat_addition(items: List[Item], total_calories: float, 
+                          base_result: List[Tuple[str, float]]) -> List[Tuple[str, float]]:
+    """
+    Simple approach: add a small amount of the best treat.
+    
+    Args:
+        items: List of Item objects
+        total_calories: Target calories
+        base_result: Base optimization result
+    
+    Returns:
+        List of tuples [(item_name, quantity_in_oz), ...] or empty list if addition fails
+    """
+    # Get available treats
+    treats = [item for item in items if item.item_type == 'treat']
+    if not treats:
+        return []
+    
+    # Find the treat with best macronutrient profile
+    best_treat = min(treats, key=lambda t: t.max_carbs)  # Lowest carbs
+    
+    # Add a small amount (0.01 oz)
+    treat_oz = 0.01
+    treat_calories = treat_oz * best_treat.calories_per_oz
+    
+    # Check if this exceeds treat limit
+    if treat_calories > total_calories * 0.1:
+        return []
+    
+    # Create new result with treat added
+    new_result = base_result.copy()
+    
+    # Check if treat is already in result
+    treat_found = False
+    for i, (name, qty) in enumerate(new_result):
+        if name == best_treat.name:
+            new_result[i] = (name, qty + treat_oz)
+            treat_found = True
+            break
+    
+    if not treat_found:
+        new_result.append((best_treat.name, treat_oz))
+    
+    # Reduce a food item to compensate for calories
+    food_items = [(name, qty) for name, qty in new_result if qty > 0 and 
+                 any(item.name == name and item.item_type == 'food' for item in items)]
+    
+    if not food_items:
+        return []
+    
+    # Reduce the food item with highest calories per oz
+    food_items.sort(key=lambda x: next(item.calories_per_oz for item in items if item.name == x[0]), reverse=True)
+    
+    food_name, food_qty = food_items[0]
+    food_item = next(item for item in items if item.name == food_name)
+    food_reduction_oz = treat_calories / food_item.calories_per_oz
+    
+    if food_reduction_oz >= food_qty:
+        return []  # Can't reduce enough
+    
+    # Apply reduction
+    for i, (name, qty) in enumerate(new_result):
+        if name == food_name:
+            new_result[i] = (name, qty - food_reduction_oz)
+            break
+    
+    return new_result
+
+
+def _flexible_treat_optimization(items: List[Item], total_calories: float) -> List[Tuple[str, float]]:
+    """
+    Flexible optimization that prioritizes treat inclusion.
+    
+    Uses a weighted objective that balances nutrition quality with treat inclusion.
+    
+    Args:
+        items: List of Item objects
+        total_calories: Target calories
+    
+    Returns:
+        List of tuples [(item_name, quantity_in_oz), ...] or empty list if no solution
+    """
+    num_items = len(items)
+    
+    def objective(quantities):
+        """Weighted objective: nutrition quality + treat inclusion bonus."""
+        total_oz = sum(quantities) + 1e-10
+        
+        # Calculate macronutrient ratios
+        weighted_protein = sum(quantities[i] * items[i].min_protein 
+                              for i in range(num_items)) / total_oz
+        weighted_carbs = sum(quantities[i] * items[i].max_carbs 
+                            for i in range(num_items)) / total_oz
+        weighted_fat = sum(quantities[i] * items[i].min_fat 
+                          for i in range(num_items)) / total_oz
+        
+        # Nutrition penalties (minimize violations)
+        adjusted_carbs = weighted_carbs * (1 - config.CARB_OVERESTIMATION_FACTOR)
+        protein_penalty = (max(0, config.MACRONUTRIENT_TARGETS['protein'] - weighted_protein)) ** 2
+        carbs_penalty = (max(0, adjusted_carbs - config.MACRONUTRIENT_TARGETS['carbs'])) ** 2
+        fat_penalty = (max(0, config.MACRONUTRIENT_TARGETS['fat'] - weighted_fat)) ** 2
+        
+        # Treat limit penalty
+        treat_calories = sum(quantities[i] * items[i].calories_per_oz 
+                           for i in range(num_items) if items[i].item_type == 'treat')
+        treat_limit_penalty = (max(0, treat_calories - total_calories * 0.1)) ** 2
+        
+        # Treat inclusion bonus (negative penalty for including treats)
+        treat_quantity = sum(quantities[i] for i in range(num_items) if items[i].item_type == 'treat')
+        treat_bonus = -min(treat_quantity, 0.1) * 10  # Bonus for up to 0.1 oz of treats
+        
+        # Quantity penalty (prefer minimal solutions)
+        quantity_penalty = sum(quantities) * 0.01
+        
+        return (protein_penalty + carbs_penalty + fat_penalty + treat_limit_penalty + 
+                treat_bonus + quantity_penalty)
+    
+    def calorie_constraint(quantities):
+        """Ensure total calories equal target."""
+        return sum(quantities[i] * items[i].calories_per_oz 
+                   for i in range(num_items)) - total_calories
+    
+    # Initial guess: equal distribution with slight treat preference
+    initial_guess = np.array([total_calories / (num_items * items[i].calories_per_oz) 
+                              for i in range(num_items)])
+    
+    # Boost treat quantities in initial guess
+    for i in range(num_items):
+        if items[i].item_type == 'treat':
+            initial_guess[i] *= 1.5
+    
+    constraints = [{'type': 'eq', 'fun': calorie_constraint}]
+    bounds = [(0, None) for _ in range(num_items)]
+    
+    # Try optimization
+    result = minimize(objective, initial_guess, method='SLSQP', 
+                      bounds=bounds, constraints=constraints)
+    
+    if result.success:
+        quantities = [(items[i].name, round(float(result.x[i]), 2)) 
+                      for i in range(num_items)]
+        
+        # Check if we actually included treats
+        treat_quantities = [qty for name, qty in quantities 
+                           if qty > 0 and any(item.name == name and item.item_type == 'treat' 
+                                            for item in items)]
+        
+        if treat_quantities:
+            return quantities
+    
+    return []
 
 
 def _find_best_approximation(items: List[Item], total_calories: float,
-                             bounds: List[Tuple], num_items: int) -> List[Tuple[str, float]]:
+                             bounds: List[Tuple], num_items: int, include_treat: bool = False) -> List[Tuple[str, float]]:
     """
     Find best approximation when exact solution is infeasible.
     
@@ -211,6 +557,7 @@ def _find_best_approximation(items: List[Item], total_calories: float,
         total_calories: Target total calories
         bounds: Quantity bounds for each item
         num_items: Number of items
+        include_treat: Whether to include treats (ignored in this simplified version)
     
     Returns:
         List of tuples [(item_name, quantity_in_oz), ...]
@@ -227,19 +574,20 @@ def _find_best_approximation(items: List[Item], total_calories: float,
                           for i in range(num_items)) / total_oz
         
         # Penalize constraint violations
-        # Adjust carb value downward by overestimation factor (PetMD³)
         adjusted_carbs = weighted_carbs * (1 - config.CARB_OVERESTIMATION_FACTOR)
         protein_penalty = (max(0, config.MACRONUTRIENT_TARGETS['protein'] - weighted_protein)) ** 2
         carbs_penalty = (max(0, adjusted_carbs - config.MACRONUTRIENT_TARGETS['carbs'])) ** 2
         fat_penalty = (max(0, config.MACRONUTRIENT_TARGETS['fat'] - weighted_fat)) ** 2
         
-        # Treat penalty: treats should not exceed 10% of total calories (VCA Animal Hospitals⁴)
+        # Treat limit penalty
         treat_calories = sum(quantities[i] * items[i].calories_per_oz 
                            for i in range(num_items) if items[i].item_type == 'treat')
-        treat_penalty = (max(0, treat_calories - total_calories * 0.1)) ** 2
+        treat_limit_penalty = (max(0, treat_calories - total_calories * 0.1)) ** 2
         
-        # Small penalty on total quantity to prefer minimal solutions
-        return protein_penalty + carbs_penalty + fat_penalty + treat_penalty + sum(quantities) * 0.01
+        # Small penalty on total quantity
+        quantity_penalty = sum(quantities) * 0.01
+        
+        return protein_penalty + carbs_penalty + fat_penalty + treat_limit_penalty + quantity_penalty
     
     def calorie_constraint(quantities):
         """Ensure total calories equal target."""

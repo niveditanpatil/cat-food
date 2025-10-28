@@ -13,6 +13,7 @@ A Python application that calculates optimal food quantities for cats using line
   - Treats ≤ 10% of total calories⁴
 - **Moisture Adjustment**: Automatically adjusts dry-matter nutritional values for wet foods
 - **Treat Management**: Distinguishes between food and treats with automatic calorie limits
+- **Interactive Selection**: User-friendly interface for selecting items and preferences
 - **CSV Data Management**: Easy-to-edit CSV format for managing food items
 
 ## Project Structure
@@ -22,6 +23,7 @@ cat-food/
 ├── config.py          # Configuration constants (weight units, macronutrient targets)
 ├── nutrition.py       # Core business logic (Item class, calculations, optimization)
 ├── main.py           # Entry point with I/O operations (CSV loading)
+├── interactive.py    # Interactive user interface for item selection
 ├── food_and_treats.csv  # Food and treat item data
 ├── cat_config.csv    # Cat profile configuration
 ├── requirements.txt  # Python dependencies
@@ -55,20 +57,142 @@ cat-food/
 
 ## Usage
 
-### Basic Usage
+### Interactive Mode (Default)
 
-Run the main script:
+Run the application in interactive mode:
 ```bash
 python main.py
 ```
 
-This will:
-1. Load cat configuration from `cat_config.csv` (weight, activity, neutering status, meal count)
-2. Calculate calorie requirements based on the cat's profile
-3. Load food items from `items.csv`
-4. Find optimal quantities that meet macronutrient targets
+The interactive mode provides a user-friendly interface that will:
+
+1. **Display your cat's profile** based on `cat_config.csv`
+2. **Show all available food items and treats** from `food_and_treats.csv` in a numbered list
+3. **Let you select specific items** by entering their numbers (e.g., "1,3,5" or "1 3 5")
+4. **Ask about treat preferences** (include at least one treat or optimize purely for nutrition)
+5. **Confirm your selection** before calculating
+6. **Calculate optimal quantities** and display formatted results
+
+**Example interaction:**
+```
+🐱 Cat Food Nutrition Optimizer
+==================================================
+📊 Cat Profile:
+   Weight: 5.5 kg
+   Activity: 1 (Low)
+   Neutered: Yes
+   Meals per day: 4
+   Calories per meal: 56.4
+
+================================================================================
+AVAILABLE FOOD ITEMS AND TREATS
+================================================================================
+
+FOOD ITEMS (3 available):
+--------------------------------------------------
+ 1. Dave's pet food chicken dinner pate
+    Calories/oz: 35.28, Protein: 40.91%, Carbs: 4.55%, Fat: 29.55%
+
+ 2. Vital essentials freeze dried raw duck entree nibs
+    Calories/oz: 148.15, Protein: 50.53%, Carbs: 2.11%, Fat: 22.11%
+
+ 3. Tikicat after dark chicken quail and chicken liver recipe in broth
+    Calories/oz: 28.25, Protein: 58.82%, Carbs: 4.71%, Fat: 11.76%
+
+TREATS (2 available):
+--------------------------------------------------
+ 4. Bonkers purrpops chicky licks
+    Calories/oz: 160.14, Protein: 63.83%, Carbs: 1.28%, Fat: 22.34%
+
+ 5. Choolip berry good milk
+    Calories/oz: 23.37, Protein: 25.00%, Carbs: 0.00%, Fat: 25.00%
+
+SELECTION INSTRUCTIONS:
+- Enter the numbers of items you want to include (e.g., '1,3,5' or '1 3 5')
+- You can select any combination of food items and treats
+- Press Enter with no input to select all items
+
+Enter item numbers: 1,3,4
+
+SELECTED ITEMS:
+- Food items: 2
+- Treats: 1
+  Food: Dave's pet food chicken dinner pate, Tikicat after dark chicken quail and chicken liver recipe in broth
+  Treats: Bonkers purrpops chicky licks
+
+TREAT PREFERENCE:
+- Would you like to ensure at least one treat is included in the meal?
+- This will prioritize including treats even if it means slightly suboptimal nutrition
+- Default: No (optimize purely for nutrition)
+
+Include at least one treat? (y/n): y
+✓ At least one treat will be included in the meal.
+
+================================================================================
+CALCULATION SUMMARY
+================================================================================
+Target calories: 56.4
+Selected items: 3
+Treat preference: Include at least one treat
+
+Selected items:
+ 1. Dave's pet food chicken dinner pate (food)
+ 2. Tikicat after dark chicken quail and chicken liver recipe in broth (food)
+ 3. Bonkers purrpops chicky licks (treat)
+
+================================================================================
+Proceed with calculation? (y/n): y
+
+🔄 Calculating optimal quantities...
+
+================================================================================
+OPTIMAL MEAL PLAN
+================================================================================
+Target calories: 56.4
+Actual calories: 56.4
+Total quantity: 0.36 oz
+
+RECOMMENDED AMOUNTS:
+--------------------------------------------------
+Food items:
+  • Dave's pet food chicken dinner pate: 0.20 oz
+  • Tikicat after dark chicken quail and chicken liver recipe in broth: 0.00 oz
+Treats:
+  • Bonkers purrpops chicky licks: 0.16 oz
+
+================================================================================
+```
+
+### Non-Interactive Mode
+
+For automated use or scripting, use the `--non-interactive` flag:
+
+```bash
+python main.py --non-interactive
+```
+
+This mode will:
+- Use all items from `food_and_treats.csv`
+- Use default treat preferences (no forced treat inclusion)
+- Output results in a simple format
 
 ### Configuring Your Cat's Profile
+
+Edit `cat_config.csv` to set your cat's parameters:
+
+```csv
+parameter,value
+weight_kg,5.5
+activity,1
+neutered,True
+meal_count,4
+```
+
+**Parameters:**
+- `weight_kg`: Your cat's weight in kilograms
+- `activity`: Activity level (1=low/sedentary, 2=medium, 3=high/very active)
+- `neutered`: Whether your cat is neutered (`True` or `False`)
+- `meal_count`: Number of meals per day
 
 Edit `cat_config.csv` to set your cat's profile:
 ```csv
@@ -171,13 +295,26 @@ Per Meal = Daily Calories / meal_count
 
 ### 2. Optimization (`calc_quant`)
 
-Uses linear programming to find quantities that:
-- Exactly match calorie requirements
-- Meet all macronutrient constraints
-- Minimize total quantity
-- Limit treats to 10% of total calories⁴
+Uses a **two-stage optimization approach** for maximum efficiency and reliability:
 
-If no exact solution exists, falls back to nonlinear optimization to minimize constraint violations.
+**Stage 1: Standard Optimization**
+- Uses linear programming to find optimal quantities without treat constraints
+- Minimizes total quantity while meeting macronutrient targets
+- Falls back to nonlinear optimization if linear programming fails
+
+**Stage 2: Treat Inclusion (if requested)**
+- Checks if Stage 1 already includes treats
+- If not, uses **greedy substitution strategy**:
+  - Tries substituting small amounts of food with treats
+  - Maintains calorie balance and reasonable nutrition
+  - Falls back to simple treat addition if substitution fails
+- Ensures treats are limited to 10% of total calories
+
+**Key Benefits:**
+- **More reliable**: Avoids infeasible constraint combinations
+- **Faster**: Two-stage approach is more efficient than complex single-stage optimization
+- **Flexible**: Gracefully handles treat inclusion requests
+- **Robust**: Multiple fallback strategies ensure solutions are found
 
 ### 3. Carbohydrate Calculation
 
@@ -230,7 +367,7 @@ Core functionality:
   - Attributes: `name`, `calories_per_oz`, `min_protein`, `max_carbs`, `min_fat`
   - All nutrients automatically converted to dry matter basis for fair comparison
 - **calc_cal()**: Calculate calorie requirements based on weight, activity, and meal count
-- **calc_quant()**: Find optimal quantities using linear programming
+- **calc_quant()**: Find optimal quantities using two-stage optimization approach
 - **Item.__init__()**: Automatically converts all weights to ounces and nutrients to dry matter basis
 
 ### main.py
